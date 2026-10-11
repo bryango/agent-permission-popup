@@ -19,11 +19,21 @@ private func debugLog(_ message: String) {
 private enum PopupHost: String {
     case codex
     case claude
+    case dsh
+
+    // Return and the global key authorize only the handoff to Auto review.
+    var continueDecision: HookDecision { self == .dsh ? .allow : .deferToHost }
+    var authorizeDecision: HookDecision { self == .dsh ? .directAllow : .allow }
+    var hasContinueButton: Bool { true }
+    var allowButtonTitle: String {
+        self == .dsh ? "Directly Approve  ⌃↩" : "Authorize  ⌃↩"
+    }
 
     var displayName: String {
         switch self {
         case .codex: return "Codex"
         case .claude: return "Claude"
+        case .dsh: return "DSH"
         }
     }
 
@@ -31,6 +41,7 @@ private enum PopupHost: String {
         switch self {
         case .codex: return "PermissionRequest"
         case .claude: return "PreToolUse"
+        case .dsh: return "PermissionRequest"
         }
     }
 
@@ -44,6 +55,10 @@ private enum PopupHost: String {
         case .claude:
             return request.permissionMode == "auto"
                 && ["Bash", "Edit", "Write"].contains(request.toolName)
+        case .dsh:
+            // The trusted Semi Auto caller chooses candidate coverage. Do not
+            // filter tools, query Codex metadata, or reinterpret permission_mode.
+            return true
         }
     }
 }
@@ -67,6 +82,7 @@ private struct HookRequest {
     let language: SourceLanguage
 
     static func parse(_ data: Data, host: PopupHost = .codex) throws -> HookRequest {
+        if host == .dsh { return try parseDSH(data) }
         guard data.count <= maximumInputBytes else {
             throw ParseError.inputTooLarge
         }
@@ -129,6 +145,56 @@ private struct HookRequest {
             toolName: toolName,
             permissionMode: root["permission_mode"] as? String,
             reason: reason,
+            source: source,
+            language: language
+        )
+    }
+
+    private static func parseDSH(_ data: Data) throws -> HookRequest {
+        guard data.count <= maximumInputBytes else { throw ParseError.inputTooLarge }
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["hook_event_name"] as? String == "PermissionRequest",
+              let cwd = root["cwd"] as? String,
+              !cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let toolName = root["tool_name"] as? String,
+              !toolName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let input = root["tool_input"] as? [String: Any] else {
+            throw ParseError.invalidPermissionRequest
+        }
+
+        var source = Self.prettyJSON(input)
+        var language = SourceLanguage.json
+        switch toolName {
+        case "Bash", "bash":
+            // Never hide additional DSH arguments (e.g. requested sandbox
+            // permissions) behind a command-only display.
+            if let command = input["command"] as? String,
+               Set(input.keys).isSubset(of: ["command", "description", "justification"]) {
+                source = command
+                language = .shell
+            }
+        case "Edit", "edit":
+            if let rendered = Self.claudeEditSource(input) {
+                source = rendered
+                language = .text
+            }
+        case "Write", "write":
+            if let rendered = Self.claudeWriteSource(input) {
+                source = rendered
+                language = .text
+            }
+        default:
+            break
+        }
+
+        return HookRequest(
+            sessionID: root["session_id"] as? String ?? "",
+            turnID: "",
+            transcriptPath: nil,
+            cwd: cwd,
+            toolName: toolName,
+            permissionMode: root["permission_mode"] as? String,
+            reason: (input["description"] as? String) ?? (input["justification"] as? String),
             source: source,
             language: language
         )
@@ -399,6 +465,7 @@ private struct DisplayText {
 
 private enum HookDecision {
     case allow
+    case directAllow
     case deny
     case timeout
     case deferToHost
@@ -407,7 +474,7 @@ private enum HookDecision {
         switch self {
         case .deny, .timeout:
             return true
-        case .allow, .deferToHost:
+        case .allow, .directAllow, .deferToHost:
             return false
         }
     }
@@ -417,8 +484,18 @@ private enum HookDecision {
     }
 
     func responseData(for host: PopupHost) -> Data? {
+        // Defensive boundary: even an accidental abstention cannot let DSH
+        // proceed without an explicit human allow.
+        if host == .dsh, case .deferToHost = self {
+            return HookDecision.deny.responseData(for: .dsh)
+        }
         let decision: [String: Any]
         switch self {
+        case .directAllow:
+            // A distinct DSH-only value makes older callers fail closed instead
+            // of silently treating direct approval as a review handoff.
+            guard host == .dsh else { return nil }
+            decision = ["behavior": "allow_direct"]
         case .allow:
             decision = ["behavior": "allow"]
         case .deny:
@@ -439,7 +516,7 @@ private enum HookDecision {
 
         let hookOutput: [String: Any]
         switch host {
-        case .codex:
+        case .codex, .dsh:
             hookOutput = [
                 "hookEventName": host.hookEventName,
                 "decision": decision,
@@ -461,6 +538,22 @@ private enum HookDecision {
 }
 
 private let popupTimeoutDecision = HookDecision.timeout
+
+private enum DSHFailure {
+    static func responseData(_ reason: String) -> Data {
+        let output: [String: Any] = ["hookSpecificOutput": [
+            "hookEventName": "PermissionRequest",
+            "decision": ["behavior": "deny", "message": reason],
+        ]]
+        return (try? JSONSerialization.data(withJSONObject: output, options: [.sortedKeys]))
+            ?? Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+    }
+
+    static func emit(_ reason: String) {
+        FileHandle.standardOutput.write(responseData(reason))
+        FileHandle.standardOutput.write(Data([0x0A]))
+    }
+}
 
 private func isCommandWDismissal(
     charactersIgnoringModifiers: String?,
@@ -840,6 +933,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         self.request = request
         self.host = host
         self.raiseHost = raiseHost
+        if host == .dsh { self.decision = .deny }
         let singleLineThreadTitle = threadTitle?
             .components(separatedBy: .newlines)
             .joined(separator: " ")
@@ -910,7 +1004,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     }
 
     @objc func authorize(_ sender: Any?) {
-        finish(with: .allow)
+        finish(with: host.authorizeDecision)
     }
 
     @objc private func deny(_ sender: Any?) {
@@ -918,7 +1012,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     }
 
     @objc func continueInHost(_ sender: Any?) {
-        finish(with: .deferToHost)
+        finish(with: host.continueDecision)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -960,6 +1054,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         )
         window.title = "\(host.displayName) permission request"
         if host == .claude { window.title += " — auto mode at request" }
+        if host == .dsh { window.title += " — human authorization" }
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
@@ -993,7 +1088,11 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         location.lineBreakMode = .byTruncatingMiddle
         location.toolTip = displayCWD.value
 
-        let reasonValue = displayReason?.value ?? ""
+        var reasonValue = displayReason?.value ?? ""
+        if host == .dsh {
+            reasonValue = "Proceed to Auto Review requests review; Directly Approve skips Auto review for this action."
+                + (reasonValue.isEmpty ? "" : "\n" + reasonValue)
+        }
         let reason = NSTextField(wrappingLabelWithString: reasonValue.isEmpty
             ? "Review the exact request before authorizing it."
             : reasonValue)
@@ -1037,7 +1136,8 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         denyButton.keyEquivalent = "\u{1b}"
 
         let deferButton = NSButton(
-            title: "Continue in \(host.displayName)  ↩ / \(hotKey.displayName)",
+            title: host == .dsh ? "Proceed to Auto Review  ↩"
+                : "Continue in \(host.displayName)  ↩ / \(hotKey.displayName)",
             target: self,
             action: #selector(continueInHost(_:))
         )
@@ -1047,7 +1147,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         deferButton.keyEquivalentModifierMask = []
 
         let allowButton = NSButton(
-            title: "Authorize  ⌃↩",
+            title: host.allowButtonTitle,
             target: self,
             action: #selector(authorize(_:))
         )
@@ -1057,13 +1157,15 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         allowButton.keyEquivalent = "\r"
         allowButton.keyEquivalentModifierMask = [.control]
 
-        let buttonStack = NSStackView(views: [denyButton, deferButton, allowButton])
+        let buttons = host.hasContinueButton
+            ? [denyButton, deferButton, allowButton] : [denyButton, allowButton]
+        let buttonStack = NSStackView(views: buttons)
         buttonStack.orientation = .horizontal
         buttonStack.spacing = 8
 
         let footer = NSStackView(views: [shortcutStatus, buttonStack])
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
+        footer.orientation = host == .dsh ? .vertical : .horizontal
+        footer.alignment = host == .dsh ? .centerX : .centerY
         footer.spacing = 12
         footer.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1098,6 +1200,12 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     }
 
     private func updateShortcutStatus() {
+        if host == .dsh {
+            shortcutStatus?.stringValue = hotKeyRegistered
+                ? "Auto review: ↩ / global \(hotKey.displayName) • Direct approval: ⌃↩"
+                : "Auto review: ↩ • Direct approval: ⌃↩ (global shortcut unavailable)"
+            return
+        }
         shortcutStatus?.stringValue = hotKeyRegistered
             ? "Continue in \(host.displayName) globally with \(hotKey.displayName)"
             : "Global shortcut unavailable; use Continue in \(host.displayName)."
@@ -1117,14 +1225,14 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
                 keyCode: event.keyCode,
                 modifierFlags: event.modifierFlags
             ) {
-                self?.finish(with: .allow)
+                if let self { self.finish(with: self.host.authorizeDecision) }
                 return nil
             }
             if isPlainContinueKey(
                 keyCode: event.keyCode,
                 modifierFlags: event.modifierFlags
             ) {
-                self?.finish(with: .deferToHost)
+                self?.continueInHost(nil)
                 return nil
             }
             return event
@@ -1767,21 +1875,48 @@ private struct PopupOptions {
 private struct PermissionPopupMain {
     static func main() {
         guard let options = PopupOptions.parse(Array(CommandLine.arguments.dropFirst())) else {
-            FileHandle.standardError.write(Data("Usage: permission-popup [--host codex|claude] [--self-test]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: permission-popup [--host codex|claude|dsh] [--self-test]\n".utf8))
             Darwin.exit(1)
         }
         if options.selfTest {
             Darwin.exit(SelfTest.run() ? 0 : 1)
         }
 
-        let input = FileHandle.standardInput.readDataToEndOfFile()
         let host = options.host
+        let input: Data
+        if host == .dsh {
+            // Bound DSH input before allocation; the existing Codex read path
+            // stays untouched for strict compatibility.
+            do {
+                var data = Data()
+                while data.count <= maximumInputBytes {
+                    let count = min(64 * 1024, maximumInputBytes + 1 - data.count)
+                    guard let chunk = try FileHandle.standardInput.read(upToCount: count),
+                          !chunk.isEmpty else { break }
+                    data.append(chunk)
+                }
+                input = data
+            } catch {
+                DSHFailure.emit("DSH human authorization input could not be read; denied before Auto review.")
+                return
+            }
+        } else {
+            input = FileHandle.standardInput.readDataToEndOfFile()
+        }
         guard let request = try? HookRequest.parse(input, host: host) else {
+            if host == .dsh {
+                DSHFailure.emit("Invalid DSH human authorization request; denied before Auto review.")
+                return
+            }
             debugLog("Input was not valid for \(host.displayName); returning no decision")
             return
         }
 
         guard host.shouldShow(request) else {
+            if host == .dsh {
+                DSHFailure.emit("DSH human authorization unavailable; denied before Auto review.")
+                return
+            }
             debugLog("Request is not eligible for \(host.displayName); returning no decision")
             return
         }
@@ -1792,13 +1927,17 @@ private struct PermissionPopupMain {
         switch host {
         case .codex:
             raiseHost = MainCodexApplication.raiseWindow
-        case .claude:
+        case .claude, .dsh:
             let application = ClaudeHostApplication.capture()
             raiseHost = application.raiseWindow
         }
         let lifetime = configuredLifetime()
         let deadline = Date().addingTimeInterval(lifetime)
         guard let queueLock = RequestQueueLock() else {
+            if host == .dsh {
+                DSHFailure.emit("DSH human authorization queue unavailable; denied before Auto review.")
+                return
+            }
             debugLog("Could not create the popup queue lock; returning no decision")
             return
         }
@@ -1808,10 +1947,16 @@ private struct PermissionPopupMain {
                 if let response = popupTimeoutDecision.responseData(for: host) {
                     FileHandle.standardOutput.write(response)
                     FileHandle.standardOutput.write(Data([0x0A]))
+                } else if host == .dsh {
+                    DSHFailure.emit("DSH human authorization timed out; denied before Auto review.")
                 }
                 raiseHost()
             } else {
-                debugLog("Could not acquire the popup queue lock; returning no decision")
+                if host == .dsh {
+                    DSHFailure.emit("DSH human authorization queue failed; denied before Auto review.")
+                } else {
+                    debugLog("Could not acquire the popup queue lock; returning no decision")
+                }
             }
             return
         }
@@ -1825,6 +1970,10 @@ private struct PermissionPopupMain {
             case .claude:
                 threadTitle = ClaudeThreadTitleLookup.title(
                     for: request.sessionID, transcriptPath: request.transcriptPath)
+            case .dsh:
+                // DSH does not supply a Codex/Claude transcript. Never consult
+                // either host's database or infer a title from conversation text.
+                threadTitle = nil
             }
             if threadTitle == nil {
                 debugLog("Thread title unavailable; continuing without it")
@@ -1841,6 +1990,8 @@ private struct PermissionPopupMain {
             if let response = decision.responseData(for: host) {
                 FileHandle.standardOutput.write(response)
                 FileHandle.standardOutput.write(Data([0x0A]))
+            } else if host == .dsh {
+                DSHFailure.emit("DSH human authorization produced no decision; denied before Auto review.")
             }
         }
     }

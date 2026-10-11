@@ -1,9 +1,13 @@
-# Native permission popup for Codex and Claude Code
+# Native permission popup for Codex, Claude Code, and DSH
 
 One macOS AppKit helper supports Codex `PermissionRequest` and Claude Code
 `PreToolUse` through explicit host selection. With no arguments it keeps the
 existing Codex behavior. `--host claude` selects the Claude adapter; payload
 shape is never used to guess the host.
+
+`--host dsh` adds the human gate for DSH Semi Auto. It uses an independent
+`PermissionRequest` parser and explicit allow/deny responses; it does not change
+the no-argument Codex contract.
 
 The previously installed Codex helper remains unchanged. The dual-host build
 is a workspace-only candidate: it has not been installed or wired into Claude.
@@ -91,6 +95,95 @@ and Continue label identify the host. Generic `PERMISSION_POPUP_DEBUG`,
 The popup deadline defaults to 540 seconds, including queue time; finite
 overrides are clamped to 10–590 seconds. Configure the outer hook for 600 seconds.
 
+## DSH Semi Auto adapter
+
+Launch the helper as `permission-popup --host dsh`. The trusted DSH caller must
+select Semi Auto and decide which calls need human review. The popup accepts
+every valid request in this explicit host mode, including MCP/unknown tools;
+`permission_mode` is metadata, not a second mode selector or a tool whitelist.
+
+Send one JSON object on stdin and close stdin:
+
+```json
+{
+  "session_id": "dsh-session-id",
+  "transcript_path": "",
+  "cwd": "/absolute/session/workspace",
+  "permission_mode": "auto",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {"command": "pwd"},
+  "permission_suggestions": []
+}
+```
+
+Required fields: `hook_event_name` exactly `PermissionRequest`, nonblank string
+`cwd` and `tool_name`, and object-valued `tool_input`. Input is capped at 8 MiB.
+Optional metadata is not used to fabricate a transcript or title; DSH uses the
+generic tool-permission heading and never queries Codex/Claude session storage.
+The caller may map bash/edit/write to Bash/Edit/Write for presentation, or pass
+the lowercase names. Unknown tool names and fields remain visible as JSON.
+Bash specialization falls back to full JSON if additional arguments would
+otherwise be hidden (such as `sandbox_permissions`).
+
+The DSH window has **three actions**:
+
+- **Proceed to Auto Review**: button, Return/keypad Enter, or the displayed
+  global shortcut. Explicitly approves sending this action to the DSH Auto reviewer.
+- **Directly Approve**: button or Control-Return/keypad Enter. Explicitly approves
+  this action without Auto review; downstream sandbox restrictions still apply.
+- **Deny**: button, Escape, Command-W, window close, or timeout. All deny.
+
+There is no Continue/abstain route. Even an accidental internal abstention
+serializes as deny in DSH mode. The same global shortcut still means Continue
+(no decision) in Codex and Claude modes. All hosts share the queue lock; do not
+run them with different `TMPDIR` values if they must share that queue.
+
+Auto-review handoff response (one JSON line on stdout, exit 0; unchanged):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+```
+
+Direct-approval response (DSH only):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow_direct"}}}
+```
+
+The DSH caller must explicitly support `allow_direct` to skip Auto review for
+this action while preserving downstream gates and sandboxing. Older strict
+callers reject this new value; `allow` is never reinterpreted as direct approval.
+The caller integration is not implemented in this popup repository, so the new
+button alone does not establish end-to-end direct approval in DSH.
+
+Deny response (one JSON line on stdout, exit 0):
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Denied from the native permission popup."}}}
+```
+
+Timeout preserves the existing explanatory timeout/away message. Invalid DSH
+input and queue failures return explicit denial with an infrastructure reason.
+Incorrect CLI arguments exit nonzero. The DSH caller **must fail closed** for
+empty/malformed output, wrong events, unsupported decisions, nonzero exits,
+crashes, cancellation, spawn errors, and outer timeouts. Only a valid explicit
+`allow` permits calling the next Auto-review gate; `allow_direct` permits the
+updated caller to skip that reviewer for this action. The popup cannot enforce that
+the caller actually invokes Auto review or keeps the tool sandboxed.
+
+The existing 540-second popup/queue deadline and environment-variable precedence
+are unchanged. Give the external runner a longer timeout (normally 600 seconds)
+and terminate/drain the helper on cancellation. Denials restore the originating
+GUI app using the same best-effort ancestry lookup as Claude; no hardcoded DSH
+app is launched. A missing focus target does not prevent the denial response.
+
+Trust boundary: **popup process = trusted host-side authorization UI; pending
+tool process = sandboxed DSH action.** This repo neither executes pending tools
+nor changes sandbox permissions. The DSH plugin, official Auto reviewer, and
+workspace-write/approval-never enforcement belong to the DSH repo and are not
+implemented here. No global hooks are installed by building this helper.
+
 ## Display safety
 
 Shell commands and patches are displayed without rewriting their content.
@@ -117,7 +210,19 @@ mkdir -p build
   -o build/permission-popup
 build/permission-popup --self-test
 python3 test_sandbox.py build/permission-popup
+python3 test_dsh.py build/permission-popup
 ```
+
+Before the DSH patch, the unchanged self-test and all 9 `test_sandbox.py`
+tests passed on baseline commit `d8dd7bb7a2ac55202d508e0418fc66f9b26ecc2a`.
+`test_dsh.py` compiles temporary baseline/candidate drivers and compares parsing,
+eligibility, decision bytes, key predicates, and environment precedence. The
+baseline is pinned to that commit, not the moving HEAD; an explicit
+`PERMISSION_POPUP_BASELINE_REV` override is available for maintenance.
+It also tests DSH parsing, rendering, malformed-input denial through the real
+executable, and no-abstention control policy. No test bypass is added to the
+production CLI, and the existing self-test and `test_sandbox.py` are unchanged.
+These headless tests do not prove window focus or the external DSH pipeline.
 
 For a manual Claude preview after allowing GUI testing, pipe this synthetic
 request to the workspace binary. It displays a request only; it does not execute
