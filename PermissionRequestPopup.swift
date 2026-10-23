@@ -36,7 +36,7 @@ private func debugLog(_ message: String) {
         ?? environment["CODEX_PERMISSION_POPUP_DEBUG"]) == "1" else {
         return
     }
-    FileHandle.standardError.write(Data("[codex-permission-popup] \(message)\n".utf8))
+    FileHandle.standardError.write(Data("[agent-permission-popup] \(message)\n".utf8))
 }
 
 private enum PopupHost: String {
@@ -766,7 +766,7 @@ private final class RequestQueueLock {
 
     init?() {
         let path = (NSTemporaryDirectory() as NSString)
-            .appendingPathComponent("codex-permission-popup.lock")
+            .appendingPathComponent("agent-permission-popup.lock")
         descriptor = Darwin.open(
             path,
             O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
@@ -1568,7 +1568,7 @@ private enum SelfTest {
         }
 
         let transcriptURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("codex-permission-popup-\(UUID().uuidString).jsonl")
+            .appendingPathComponent("agent-permission-popup-\(UUID().uuidString).jsonl")
         let transcript = """
         {"type":"turn_context","payload":{"turn_id":"turn-auto","approvals_reviewer":"auto_review"}}
         {"type":"response_item","payload":{"turn_id":"turn-user","approvals_reviewer":"auto_review"}}
@@ -1607,7 +1607,7 @@ private enum SelfTest {
         }
 
         let stateFixtureDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("codex-permission-popup-\(UUID().uuidString)")
+            .appendingPathComponent("agent-permission-popup-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(
             at: stateFixtureDirectory,
             withIntermediateDirectories: false

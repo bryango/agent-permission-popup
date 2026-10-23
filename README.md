@@ -9,9 +9,10 @@ shape is never used to guess the host.
 `PermissionRequest` parser and explicit allow/deny responses; it does not change
 the no-argument Codex contract.
 
-The shared build is installed separately for Codex and Claude Code. Claude's
-TUI hook uses `~/.claude/hooks/agent-permission-popup --host claude`; updating
-that copy does not change Codex's helper or hook configuration.
+Codex and Claude Code use one binary at `~/.agents/hooks/agent-permission-popup`.
+Claude's TUI hook adds `--host claude`; Codex uses the default host. Updating this
+shared binary updates both integrations; their event and decision contracts
+remain separate.
 
 In Codex mode, the helper reads one hook request from standard input and checks the matching
 turn context in the session transcript. It opens an AppKit window only when the
@@ -286,7 +287,7 @@ modifiers are Control, Option, Shift, and Command.
 ## Hook configuration
 
 After copying the compiled binary to a stable path such as
-`~/.codex/hooks/codex-permission-popup`, merge this group into the
+`~/.agents/hooks/agent-permission-popup`, merge this group into the
 existing `PermissionRequest` hooks:
 
 ```json
@@ -295,7 +296,7 @@ existing `PermissionRequest` hooks:
   "hooks": [
     {
       "type": "command",
-      "command": "~/.codex/hooks/codex-permission-popup",
+      "command": "/Users/bryan/.agents/hooks/agent-permission-popup",
       "timeout": 600,
       "statusMessage": "Waiting for approval in the native popup"
     }
@@ -319,7 +320,7 @@ The previous settings are backed up at
   "matcher": "^(Bash|Edit|Write)$",
   "hooks": [{
     "type": "command",
-    "command": "/Users/bryan/.claude/hooks/agent-permission-popup --host claude",
+    "command": "/Users/bryan/.agents/hooks/agent-permission-popup --host claude",
     "timeout": 600,
     "statusMessage": "Waiting for Agent Permission Request"
   }]
@@ -329,6 +330,15 @@ The previous settings are backed up at
 Headless tests validate routing, serialization, formatting, metadata failure
 handling, and Codex regressions. They do not prove live Claude classifier
 ordering, mode changes while a popup is open, audible sound, or window focus.
+Both apps also use `/bin/sh ~/.agents/hooks/auto-jj-init.sh` for SessionStart
+(`startup|resume`, timeout 10 seconds) and
+`/bin/sh ~/.agents/hooks/jj-status-before-tool.sh` for every PreToolUse
+(timeout 2 seconds). The scripts run in the hook process's working directory.
+The 2026-10-24 shared-path migration preserved the scripts and popup bytes;
+both prior configurations are in `~/.agents/backups/shared-hooks-20261024/`.
+Review and trust the changed Codex paths in `/hooks`; trust hashes were not
+edited. The redundant Claude helper was moved to trash after verification.
+
 Installation and synthetic hook checks passed; a live TUI end-to-end test is
 still needed. Test auto→manual→auto in one real Claude session, all three
 decisions, timeout messages, renamed titles, and concurrent Codex/Claude requests.
