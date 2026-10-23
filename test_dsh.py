@@ -320,7 +320,7 @@ class DSHContractTests(unittest.TestCase):
             self.assertEqual(decisions[name], codex[name])
         self.assertEqual(decisions["defer"], decisions["deny"])
         controls = self.snapshot(op="controls", host="dsh")
-        self.assertEqual(controls["allowTitle"], "Directly Approve  ⌃↩")
+        self.assertEqual(controls["allowTitle"], "Authorize  ⌃↩")
         self.assertEqual(controls["continueResponse"], decisions["allow"])
         self.assertEqual(json.loads(controls["authorizeResponse"]), {"hookSpecificOutput": {
             "hookEventName": "PermissionRequest", "decision": {"behavior": "allow_direct"}}})

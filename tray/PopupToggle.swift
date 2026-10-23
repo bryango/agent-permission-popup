@@ -24,7 +24,7 @@ private final class PopupToggleDelegate: NSObject, NSApplicationDelegate {
     private func refresh() {
         let enabled = settings.enabled
         let label = enabled ? "Ask — popup enabled" : "Auto — continue without popup"
-        let symbol = enabled ? "hand.raised" : "bolt"
+        let symbol = enabled ? "hand.raised" : "bolt.fill"
         var image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         if !enabled, let source = image {
             let colored = NSImage(size: source.size)

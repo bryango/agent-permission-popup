@@ -3,7 +3,7 @@
 A standalone native macOS menu-bar app. It only reads and writes the popup setting.
 It does not launch the popup, modify hooks, or start at login.
 
-- Left-click: toggle Ask/Auto. A monochrome raised hand means Ask (popup enabled); a coral-red (`#FF6257`) lightning bolt means Auto (continue without the popup).
+- Left-click: toggle Ask/Auto. A monochrome raised hand means Ask (popup enabled); a filled coral-red (`#FF6257`) lightning bolt means Auto (continue without the popup).
 - Right-click: show **Quit AgentControl**. Quitting does not change the setting.
 - External setting changes appear on the icon within two seconds.
 - A failed save shows a native error alert. The icon reflects the saved setting.

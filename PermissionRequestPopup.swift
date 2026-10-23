@@ -49,7 +49,7 @@ private enum PopupHost: String {
     var authorizeDecision: HookDecision { self == .dsh ? .directAllow : .allow }
     var hasContinueButton: Bool { true }
     var allowButtonTitle: String {
-        self == .dsh ? "Directly Approve  ⌃↩" : "Authorize  ⌃↩"
+        "Authorize  ⌃↩"
     }
 
     var displayName: String {
@@ -1075,9 +1075,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
             backing: .buffered,
             defer: false
         )
-        window.title = "\(host.displayName) permission request"
-        if host == .claude { window.title += " — auto mode at request" }
-        if host == .dsh { window.title += " — human authorization" }
+        window.title = "Agent Permission Request"
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.isReleasedWhenClosed = false
@@ -1111,11 +1109,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         location.lineBreakMode = .byTruncatingMiddle
         location.toolTip = displayCWD.value
 
-        var reasonValue = displayReason?.value ?? ""
-        if host == .dsh {
-            reasonValue = "Proceed to Auto Review requests review; Directly Approve skips Auto review for this action."
-                + (reasonValue.isEmpty ? "" : "\n" + reasonValue)
-        }
+        let reasonValue = displayReason?.value ?? ""
         let reason = NSTextField(wrappingLabelWithString: reasonValue.isEmpty
             ? "Review the exact request before authorizing it."
             : reasonValue)
@@ -1139,7 +1133,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         integrity.textColor = revealedCharacterCount == 0
             ? .secondaryLabelColor
             : .systemOrange
-        integrity.isHidden = host == .codex && revealedCharacterCount == 0
+        integrity.isHidden = revealedCharacterCount == 0
 
         let scrollView = makeSourceView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -1160,8 +1154,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         denyButton.keyEquivalent = "\u{1b}"
 
         let deferButton = NSButton(
-            title: host == .dsh ? "Proceed to Auto Review  ↩"
-                : "Continue in \(host.displayName)  ↩ / \(hotKey.displayName)",
+            title: "Auto review  ↩ / \(hotKey.displayName)",
             target: self,
             action: #selector(continueInHost(_:))
         )
@@ -1188,27 +1181,22 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         buttonStack.spacing = 8
 
         let footer = NSStackView(views: [shortcutStatus, buttonStack])
-        footer.orientation = host == .dsh ? .vertical : .horizontal
-        footer.alignment = host == .dsh ? .centerX : .centerY
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
         footer.spacing = 12
         footer.translatesAutoresizingMaskIntoConstraints = false
-        let footerRow: NSView
-        if host == .codex {
-            footer.distribution = .fill
-            buttonStack.distribution = .fill
-            buttonStack.setContentHuggingPriority(.required, for: .horizontal)
-            footerRow = NSView()
-            footerRow.translatesAutoresizingMaskIntoConstraints = false
-            footerRow.addSubview(footer)
-            NSLayoutConstraint.activate([
-                footer.trailingAnchor.constraint(equalTo: footerRow.trailingAnchor),
-                footer.leadingAnchor.constraint(greaterThanOrEqualTo: footerRow.leadingAnchor),
-                footer.topAnchor.constraint(equalTo: footerRow.topAnchor),
-                footer.bottomAnchor.constraint(equalTo: footerRow.bottomAnchor),
-            ])
-        } else {
-            footerRow = footer
-        }
+        footer.distribution = .fill
+        buttonStack.distribution = .fill
+        buttonStack.setContentHuggingPriority(.required, for: .horizontal)
+        let footerRow = NSView()
+        footerRow.translatesAutoresizingMaskIntoConstraints = false
+        footerRow.addSubview(footer)
+        NSLayoutConstraint.activate([
+            footer.trailingAnchor.constraint(equalTo: footerRow.trailingAnchor),
+            footer.leadingAnchor.constraint(greaterThanOrEqualTo: footerRow.leadingAnchor),
+            footer.topAnchor.constraint(equalTo: footerRow.topAnchor),
+            footer.bottomAnchor.constraint(equalTo: footerRow.bottomAnchor),
+        ])
 
         root.addArrangedSubview(title)
         root.addArrangedSubview(location)
@@ -1241,15 +1229,9 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     }
 
     private func updateShortcutStatus() {
-        if host == .dsh {
-            shortcutStatus?.stringValue = hotKeyRegistered
-                ? "Auto review: ↩ / global \(hotKey.displayName) • Direct approval: ⌃↩"
-                : "Auto review: ↩ • Direct approval: ⌃↩ (global shortcut unavailable)"
-            return
-        }
         shortcutStatus?.stringValue = hotKeyRegistered
-            ? "Continue in \(host.displayName) globally with \(hotKey.displayName)"
-            : "Global shortcut unavailable; use Continue in \(host.displayName)."
+            ? "Auto review globally with \(hotKey.displayName)"
+            : "Global shortcut unavailable; use Auto review."
     }
 
     private func registerLocalKeyMonitor() {

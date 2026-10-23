@@ -9,8 +9,9 @@ shape is never used to guess the host.
 `PermissionRequest` parser and explicit allow/deny responses; it does not change
 the no-argument Codex contract.
 
-The previously installed Codex helper remains unchanged. The dual-host build
-is a workspace-only candidate: it has not been installed or wired into Claude.
+The shared build is installed separately for Codex and Claude Code. Claude's
+TUI hook uses `~/.claude/hooks/agent-permission-popup --host claude`; updating
+that copy does not change Codex's helper or hook configuration.
 
 In Codex mode, the helper reads one hook request from standard input and checks the matching
 turn context in the session transcript. It opens an AppKit window only when the
@@ -41,7 +42,7 @@ When shown, the popup returns a Codex permission decision on standard output:
   `behavior: deny` with a timeout-specific message noting that the user may be
   away and asking Codex to pause after repeated timeouts, then raises the main
   ChatGPT/Codex window.
-- **Continue in Codex**, pressing plain `Return` or keypad `Enter`, the global
+- **Auto review**, pressing plain `Return` or keypad `Enter`, the global
   shortcut, or an internal failure returns no decision, so Codex falls back to
   auto-review or its normal approval prompt.
 
@@ -51,7 +52,7 @@ The window-local `⌃Return` approval binding is not registered globally.
 Concurrent requests share a per-user lock and are shown one at a time, so one
 shortcut press cannot advance multiple requests.
 
-## Claude Code adapter (sandbox candidate)
+## Claude Code adapter
 
 Only `PreToolUse` requests for `Bash`, `Edit`, or `Write` whose incoming
 `permission_mode` is exactly `auto` show a popup. Manual/default, plan,
@@ -88,8 +89,12 @@ It never guesses from the current foreground app and does not launch a new
 Claude session if no owner can be found. This restores the application, not a
 specific terminal tab; exact-tab behavior is not implemented or verified.
 
-Both hosts retain the same queue lock and global shortcut. The window title
-and Continue label identify the host. Generic `PERMISSION_POPUP_DEBUG`,
+All hosts share the title **Agent Permission Request**, the **Auto review**,
+**Authorize**, and **Deny** labels, and the same right-aligned footer. Typography,
+shortcuts, and host-specific decision semantics are unchanged. Routine display
+notes are hidden; hidden-character warnings remain visible. The Auto review label
+does not guarantee a classifier check in Claude. Both hosts retain the same queue
+lock and global shortcut. Generic `PERMISSION_POPUP_DEBUG`,
 `PERMISSION_POPUP_HOTKEY`, and `PERMISSION_POPUP_TIMEOUT` override the legacy
 `CODEX_PERMISSION_*` variables, which remain supported for compatibility.
 The popup deadline defaults to 540 seconds, including queue time; finite
@@ -128,9 +133,9 @@ otherwise be hidden (such as `sandbox_permissions`).
 
 The DSH window has **three actions**:
 
-- **Proceed to Auto Review**: button, Return/keypad Enter, or the displayed
+- **Auto review**: button, Return/keypad Enter, or the displayed
   global shortcut. Explicitly approves sending this action to the DSH Auto reviewer.
-- **Directly Approve**: button or Control-Return/keypad Enter. Explicitly approves
+- **Authorize**: button or Control-Return/keypad Enter. Explicitly approves
   this action without Auto review; downstream sandbox restrictions still apply.
 - **Deny**: button, Escape, Command-W, window close, or timeout. All deny.
 
@@ -303,20 +308,20 @@ it would also place MCP and other permission requests behind the same global
 review shortcut. Review and trust the new hook definition with `/hooks`
 after wiring it in.
 
-### Future Claude wiring (not installed)
+### Claude TUI wiring
 
-After live testing, a Claude `settings.json` hook could use the following entry
-inside `hooks.PreToolUse`. Replace the path with the chosen installation path;
-do not point global hooks at a transient build directory.
+Installed on 2026-10-24 in `~/.claude/settings.json`, inside `hooks.PreToolUse`.
+The previous settings are backed up at
+`~/.claude/backups/settings.before-agent-popup-20261024.json`.
 
 ```json
 {
   "matcher": "^(Bash|Edit|Write)$",
   "hooks": [{
     "type": "command",
-    "command": "/absolute/stable/path/permission-popup --host claude",
+    "command": "/Users/bryan/.claude/hooks/agent-permission-popup --host claude",
     "timeout": 600,
-    "statusMessage": "Waiting for the native permission popup"
+    "statusMessage": "Waiting for Agent Permission Request"
   }]
 }
 ```
@@ -324,5 +329,6 @@ do not point global hooks at a transient build directory.
 Headless tests validate routing, serialization, formatting, metadata failure
 handling, and Codex regressions. They do not prove live Claude classifier
 ordering, mode changes while a popup is open, audible sound, or window focus.
-Before deployment, test auto→manual→auto in one real Claude session, all three
+Installation and synthetic hook checks passed; a live TUI end-to-end test is
+still needed. Test auto→manual→auto in one real Claude session, all three
 decisions, timeout messages, renamed titles, and concurrent Codex/Claude requests.
