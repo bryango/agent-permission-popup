@@ -7,6 +7,29 @@ import SQLite3
 private let maximumInputBytes = 8 * 1024 * 1024
 private let defaultLifetime: TimeInterval = 540
 
+private enum PopupSettings {
+    private struct Configuration: Decodable {
+        let enabled: Bool
+    }
+
+    static var isEnabled: Bool {
+        let override = ProcessInfo.processInfo.environment["PERMISSION_POPUP_CONFIG"]
+        let url: URL
+        if let override, override.hasPrefix("/") {
+            url = URL(fileURLWithPath: override)
+        } else {
+            url = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/permission-popup/config.json")
+        }
+        // Only an explicit Boolean false disables the popup.
+        guard let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(Configuration.self, from: data) else {
+            return true
+        }
+        return config.enabled
+    }
+}
+
 private func debugLog(_ message: String) {
     let environment = ProcessInfo.processInfo.environment
     guard (environment["PERMISSION_POPUP_DEBUG"]
@@ -1116,6 +1139,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         integrity.textColor = revealedCharacterCount == 0
             ? .secondaryLabelColor
             : .systemOrange
+        integrity.isHidden = host == .codex && revealedCharacterCount == 0
 
         let scrollView = makeSourceView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -1168,13 +1192,30 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         footer.alignment = host == .dsh ? .centerX : .centerY
         footer.spacing = 12
         footer.translatesAutoresizingMaskIntoConstraints = false
+        let footerRow: NSView
+        if host == .codex {
+            footer.distribution = .fill
+            buttonStack.distribution = .fill
+            buttonStack.setContentHuggingPriority(.required, for: .horizontal)
+            footerRow = NSView()
+            footerRow.translatesAutoresizingMaskIntoConstraints = false
+            footerRow.addSubview(footer)
+            NSLayoutConstraint.activate([
+                footer.trailingAnchor.constraint(equalTo: footerRow.trailingAnchor),
+                footer.leadingAnchor.constraint(greaterThanOrEqualTo: footerRow.leadingAnchor),
+                footer.topAnchor.constraint(equalTo: footerRow.topAnchor),
+                footer.bottomAnchor.constraint(equalTo: footerRow.bottomAnchor),
+            ])
+        } else {
+            footerRow = footer
+        }
 
         root.addArrangedSubview(title)
         root.addArrangedSubview(location)
         root.addArrangedSubview(reason)
         root.addArrangedSubview(integrity)
         root.addArrangedSubview(scrollView)
-        root.addArrangedSubview(footer)
+        root.addArrangedSubview(footerRow)
 
         window.contentView = NSView()
         window.contentView?.addSubview(root)
@@ -1193,7 +1234,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
             integrity.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48),
             scrollView.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48),
             scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 300),
-            footer.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48),
+            footerRow.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48),
         ])
 
         self.window = window
@@ -1883,6 +1924,7 @@ private struct PermissionPopupMain {
         }
 
         let host = options.host
+        guard PopupSettings.isEnabled else { return }
         let input: Data
         if host == .dsh {
             // Bound DSH input before allocation; the existing Codex read path
@@ -1942,6 +1984,7 @@ private struct PermissionPopupMain {
             return
         }
         guard queueLock.acquire(until: deadline) else {
+            guard PopupSettings.isEnabled else { return }
             if Date() >= deadline {
                 debugLog("Popup queue deadline expired; denying the request")
                 if let response = popupTimeoutDecision.responseData(for: host) {
@@ -1962,6 +2005,7 @@ private struct PermissionPopupMain {
         }
 
         withExtendedLifetime(queueLock) {
+            guard PopupSettings.isEnabled else { return }
             let threadTitle: String?
             switch host {
             case .codex:

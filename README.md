@@ -197,6 +197,31 @@ complete content without reading or modifying the destination. Unrecognized or
 malformed fields in tool-input objects fall back to JSON. Invalid hook envelopes
 (including a non-object Claude `tool_input`) return no decision to the host.
 
+## Menu-bar toggle
+
+The standalone native app in [`tray/`](tray/) writes
+`~/.config/permission-popup/config.json`:
+
+```json
+{"enabled": false}
+```
+
+Left-click its icon to enable or disable the popup. Right-click for Quit.
+Quitting the tray app does not change the saved setting. A missing, unreadable,
+or invalid setting keeps the popup enabled; only a JSON Boolean `false` disables it.
+`PERMISSION_POPUP_CONFIG` can select an absolute file path for both programs.
+
+When disabled, new popup invocations exit successfully with no stdout, for all
+hosts. This is **no decision**, not an approval. The host continues its normal
+permission processing. In particular, an existing strict DSH caller may reject
+empty output; it must not mistake it for `allow` or `allow_direct`.
+Already-visible windows are unchanged. Queued requests check the setting again
+before opening a window. Enabling restores the existing popup behavior.
+
+The installed helper must be updated to a build that reads this setting.
+Building or launching the tray app alone does not replace the installed helper,
+install hooks, or add a login item. See the tray README for build instructions.
+
 ## Build and test
 
 ```sh

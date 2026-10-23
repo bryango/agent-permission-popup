@@ -127,6 +127,7 @@ def environment(overrides=None):
     clean = {key: value for key, value in os.environ.items()
              if not key.startswith(("PERMISSION_POPUP", "CODEX_PERMISSION"))}
     clean.update(overrides or {})
+    clean.setdefault("PERMISSION_POPUP_CONFIG", "/dev/null")
     return clean
 
 

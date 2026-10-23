@@ -30,6 +30,8 @@ def clean_environment():
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("PERMISSION_POPUP", "CODEX_PERMISSION"))
+    } | {
+        "PERMISSION_POPUP_CONFIG": "/dev/null",
     }
 
 
