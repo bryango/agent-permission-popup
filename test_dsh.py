@@ -187,7 +187,7 @@ class DSHContractTests(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def test_codex_and_claude_parse_and_eligibility_unchanged(self):
+    def test_codex_and_claude_parse_and_eligibility(self):
         transcript = self.directory / "rollout.jsonl"
         for reviewer in ("auto_review", "user", "unknown"):
             transcript.write_text(json.dumps({"type": "turn_context", "payload": {
@@ -214,8 +214,10 @@ class DSHContractTests(unittest.TestCase):
                 payload = self.payload(hook_event_name="PreToolUse", permission_mode=mode,
                                        tool_name=tool, tool_input=input_value)
                 baseline = self.parse(payload, "claude", "baseline")
-                self.assertEqual(baseline, self.parse(payload, "claude"))
                 self.assertEqual(baseline["shouldShow"], mode == "auto" and tool in {"Bash", "Edit", "Write"})
+                expected = dict(baseline)
+                expected["shouldShow"] = False
+                self.assertEqual(expected, self.parse(payload, "claude"))
         for payload in (b"not json", b"[]", self.payload(hook_event_name="wrong"),
                         self.payload(tool_input="text"), self.payload(cwd=None)):
             for host in ("codex", "claude"):
@@ -224,6 +226,25 @@ class DSHContractTests(unittest.TestCase):
         self.assertEqual(self.parse(missing_mode, "claude", "baseline"),
                          self.parse(missing_mode, "claude"))
         self.assertFalse(self.parse(missing_mode, "claude")["shouldShow"])
+
+    def test_claude_bash_requires_explicit_boolean_sandbox_escape(self):
+        for flag in (True, False, None, 0, 1, 1.0, "true", "false", "1", [], {}):
+            for mode in ("auto", "default", "plan", "acceptEdits", "bypassPermissions",
+                         "dontAsk", "unknown", None):
+                with self.subTest(flag=flag, mode=mode):
+                    payload = self.payload(hook_event_name="PreToolUse", permission_mode=mode,
+                                           tool_input={"command": "pwd",
+                                                       "dangerouslyDisableSandbox": flag})
+                    baseline = self.parse(payload, "claude", "baseline")
+                    expected = dict(baseline)
+                    expected["shouldShow"] = mode == "auto" and flag is True
+                    self.assertEqual(expected, self.parse(payload, "claude"))
+
+    def test_claude_edit_and_write_skip_even_with_sandbox_flag(self):
+        for tool in ("Edit", "Write"):
+            payload = self.payload(hook_event_name="PreToolUse", permission_mode="auto",
+                                   tool_name=tool, tool_input={"dangerouslyDisableSandbox": True})
+            self.assertFalse(self.parse(payload, "claude")["shouldShow"])
 
     def test_decision_bytes_and_options_unchanged(self):
         for host in ("codex", "claude"):

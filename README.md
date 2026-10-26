@@ -55,15 +55,20 @@ shortcut press cannot advance multiple requests.
 
 ## Claude Code adapter
 
-Only `PreToolUse` requests for `Bash`, `Edit`, or `Write` whose incoming
-`permission_mode` is exactly `auto` show a popup. Manual/default, plan,
+Only `Bash` `PreToolUse` requests whose incoming `permission_mode` is exactly
+`auto` can show a popup. They additionally require
+`tool_input.dangerouslyDisableSandbox` to be the JSON Boolean `true`.
+Missing, false, and non-Boolean values skip the popup. `Edit`, `Write`, and
+all other tools skip the popup. Manual/default, plan,
 acceptEdits, bypassPermissions, dontAsk, missing, and unknown modes return no
 decision silently. Each invocation checks the payload anew, not session-start
 settings. A mode change between invocations is therefore observed. The payload
 is a snapshot: the helper cannot track a mode switch while its window is open.
 
-`PreToolUse` creates a checkpoint for every matched call in auto mode, including
-routine commands and file edits. This is intentionally different from
+`PreToolUse` creates a checkpoint for explicit Bash sandbox escapes in auto
+mode. It does not detect all unsandboxed Bash execution: commands
+excluded from sandboxing, or sessions with sandboxing disabled, can omit the
+flag and therefore skip the popup. This is intentionally different from
 `PermissionRequest`, which only covers calls reaching a permission prompt.
 Do not register both events for this adapter.
 
@@ -269,6 +274,7 @@ printf '%s' '{
   "tool_name": "Bash",
   "tool_input": {
     "command": "printf hello",
+    "dangerouslyDisableSandbox": true,
     "description": "Preview a permission request"
   }
 }' | build/permission-popup --host claude
@@ -317,7 +323,7 @@ The previous settings are backed up at
 
 ```json
 {
-  "matcher": "^(Bash|Edit|Write)$",
+  "matcher": "^Bash$",
   "hooks": [{
     "type": "command",
     "command": "/Users/bryan/.agents/hooks/agent-permission-popup --host claude",

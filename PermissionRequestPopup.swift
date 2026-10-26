@@ -95,7 +95,7 @@ private enum PopupHost: String {
             ) == .autoReview
         case .claude:
             return request.permissionMode == "auto"
-                && ["Bash", "Edit", "Write"].contains(request.toolName)
+                && request.toolName == "Bash" && request.dangerouslyDisableSandbox
         case .dsh:
             // The trusted Semi Auto caller chooses candidate coverage. Do not
             // filter tools, query Codex metadata, or reinterpret permission_mode.
@@ -118,6 +118,7 @@ private struct HookRequest {
     let cwd: String
     let toolName: String
     let permissionMode: String?
+    let dangerouslyDisableSandbox: Bool
     let reason: String?
     let source: String
     let language: SourceLanguage
@@ -138,6 +139,11 @@ private struct HookRequest {
 
         let toolInput = root["tool_input"] ?? NSNull()
         let inputObject = toolInput as? [String: Any]
+        // JSON numbers also bridge to Bool. Require an actual JSON Boolean true.
+        let sandboxFlag = inputObject?["dangerouslyDisableSandbox"] as? NSNumber
+        let dangerouslyDisableSandbox = sandboxFlag.map {
+            CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue
+        } ?? false
         if host == .claude, inputObject == nil {
             throw ParseError.invalidPermissionRequest
         }
@@ -185,6 +191,7 @@ private struct HookRequest {
             cwd: cwd,
             toolName: toolName,
             permissionMode: root["permission_mode"] as? String,
+            dangerouslyDisableSandbox: dangerouslyDisableSandbox,
             reason: reason,
             source: source,
             language: language
@@ -235,6 +242,7 @@ private struct HookRequest {
             cwd: cwd,
             toolName: toolName,
             permissionMode: root["permission_mode"] as? String,
+            dangerouslyDisableSandbox: false,
             reason: (input["description"] as? String) ?? (input["justification"] as? String),
             source: source,
             language: language
@@ -1409,7 +1417,7 @@ private enum SelfTest {
             event: String = "PreToolUse",
             mode: String? = "auto",
             tool: String = "Bash",
-            input: [String: Any] = ["command": "printf safe"]
+            input: [String: Any] = ["command": "printf safe", "dangerouslyDisableSandbox": true]
         ) -> Data {
             var root: [String: Any] = [
                 "hook_event_name": event,
@@ -1494,6 +1502,7 @@ private enum SelfTest {
                 host: .claude
             )
             expect(edit.language == .text, "Claude Edit language", into: &failures)
+            expect(!PopupHost.claude.shouldShow(edit), "Claude Edit skipped", into: &failures)
             expect(edit.source.contains("File: /tmp/example.swift"), "Claude Edit path", into: &failures)
             expect(edit.source.contains("Replace all: true"), "Claude Edit replace-all", into: &failures)
             expect(
@@ -1516,6 +1525,7 @@ private enum SelfTest {
                 host: .claude
             )
             expect(write.language == .text, "Claude Write language", into: &failures)
+            expect(!PopupHost.claude.shouldShow(write), "Claude Write skipped", into: &failures)
             expect(write.source.contains("File: /tmp/output.txt"), "Claude Write path", into: &failures)
             expect(write.source.hasSuffix(writeContent), "Claude Write full content", into: &failures)
         } catch {
