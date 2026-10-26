@@ -57,6 +57,7 @@ private struct RegressionMain {
                     "source": request.source, "language": request.language.rawValue,
                     "shouldShow": host.shouldShow(request),
                 ]
+                __REQUEST_DETAILS__
             } catch { result = ["error": String(describing: error)] }
         case "decisions":
             for (name, decision) in [("allow", HookDecision.allow), ("deny", .deny),
@@ -154,7 +155,10 @@ class DSHContractTests(unittest.TestCase):
                     source += DRIVER.replace("__HOST_CONTROLS__",
                                              HOST_CONTROLS if label == "candidate" else "").replace(
                                                  "__CONTINUE_DECISION__", "host.continueDecision"
-                                                 if label == "candidate" else "HookDecision.deferToHost")
+                                                 if label == "candidate" else "HookDecision.deferToHost").replace(
+                                                 "__REQUEST_DETAILS__",
+                                                 'if host == .dsh { result["requestDetails"] = request.requestDetails as Any? ?? NSNull(); result["heading"] = request.heading as Any? ?? NSNull() }'
+                                                 if label == "candidate" else "")
                 (directory / name).write_text(source)
             binary = directory / "driver"
             compilation = subprocess.run(["/usr/bin/swiftc", "-parse-as-library", "-framework", "AppKit",
@@ -333,6 +337,91 @@ class DSHContractTests(unittest.TestCase):
             self.assertEqual(self.parse(oversized, host)["error"], "inputTooLarge")
         valid = json.dumps(self.payload()).encode()
         self.assertTrue(self.parse(valid.ljust(8 * 1024 * 1024, b" "))["shouldShow"])
+
+    def test_dsh_bash_execution_controls_keep_exact_command_readable(self):
+        command = "printf '%s\\n' \"quoted value\"\nprintf 'second line'\n"
+        controls = {"description": "Readable display test", "workdir": "/tmp/dsh-render",
+                    "timeoutMs": 1234, "run_in_background": False,
+                    "sandbox_permissions": "danger-full-access",
+                    "justification": "One-shot permission display"}
+        for tool in ("Bash", "bash"):
+            with self.subTest(tool=tool):
+                result = self.parse(self.payload(tool_name=tool,
+                                               tool_input=dict(command=command, **controls)))
+                self.assertEqual(result["language"], "shell")
+                self.assertEqual(result["source"], command)
+                self.assertEqual(result["heading"], controls["description"])
+                self.assertEqual(result["reason"], controls["justification"])
+                self.assertEqual(json.loads(result["requestDetails"]), dict(command=command, **controls))
+        plain = self.parse(self.payload(tool_input={"command": command}))
+        self.assertEqual(plain["language"], "shell")
+        self.assertEqual(plain["source"], command)
+
+    def test_dsh_description_heading_and_justification(self):
+        for description in (None, "", "  \n ", 123, False, [], {}):
+            result = self.parse(self.payload(tool_input={"command": "pwd", "description": description}))
+            self.assertIsNone(result["heading"])
+        result = self.parse(self.payload(tool_input={"command": "pwd", "description": "  Inspect files  ",
+                                                   "justification": "Need workspace access"}))
+        self.assertEqual(result["heading"], "Inspect files")
+        self.assertEqual(result["reason"], "Need workspace access")
+        result = self.parse(self.payload(tool_input={"command": "pwd", "description": "Inspect files",
+                                                   "justification": "Inspect files"}))
+        self.assertIsNone(result["reason"])
+
+    def test_dsh_files_and_ptc_keep_exact_body_with_execution_controls(self):
+        controls = {"sandbox_permissions": "workspace-write", "justification": "File display test"}
+        fixtures = [
+            ("Edit", {"file_path": "/tmp/example.txt", "old_string": "before\nexact snippet",
+                      "new_string": "after\nexact snippet", "replace_all": True},
+             ["/tmp/example.txt", "before\nexact snippet", "after\nexact snippet"]),
+            ("Write", {"file_path": "/tmp/example.txt", "content": "complete\nfile content\n"},
+             ["/tmp/example.txt", "complete\nfile content\n"]),
+            ("run_code", {"code": "const message = 'quoted';\nconsole.log(message);\n",
+                          "timeoutMs": 2345},
+             ["const message = 'quoted';\nconsole.log(message);\n"]),
+        ]
+        for tool, action, exact_parts in fixtures:
+            for name in {tool, tool.lower()}:
+                with self.subTest(tool=name):
+                    result = self.parse(self.payload(tool_name=name, tool_input=dict(action, **controls)))
+                    self.assertEqual(result["language"], "text")
+                    for part in exact_parts:
+                        self.assertIn(part, result["source"])
+                    self.assertEqual(result["reason"], controls["justification"])
+                    self.assertEqual(json.loads(result["requestDetails"]), dict(action, **controls))
+                    self.assertNotIn("Options:", result["source"])
+                    if tool == "run_code":
+                        self.assertEqual(result["source"], action["code"])
+                    elif tool == "Write":
+                        self.assertEqual(result["source"], "File: /tmp/example.txt\nContent:\n" + action["content"])
+
+    def test_dsh_unknown_or_malformed_execution_fields_preserve_full_json(self):
+        fixtures = []
+        base = {"command": "printf 'retain exact command'"}
+        for key, values in {
+            "description": [None, 1, True, []],
+            "justification": [None, 1, False, {}],
+            "workdir": [None, 1, True, []],
+            "timeoutMs": [None, "1000", True, False, []],
+            "run_in_background": [None, 0, 1, "true", {}],
+            "sandbox_permissions": [None, True, 1, "unknown-mode", []],
+            "unknown": [{"must_not_disappear": [1, True, "all values"]}],
+        }.items():
+            fixtures.extend(("Bash", dict(base, **{key: value})) for value in values)
+        fixtures.extend([
+            ("Write", {"file_path": "a", "sandbox_permissions": "workspace-write"}),
+            ("Write", {"file_path": "a", "content": 1}),
+            ("Edit", {"file_path": "a", "old_string": "old", "new_string": "new", "replace_all": 1}),
+            ("run_code", {"code": "await tools.bash({command: 'pwd'})", "timeoutMs": True}),
+            ("run_code", {"code": 123, "sandbox_permissions": "danger-full-access"}),
+            ("run_code", {"code": "console.log('retain')", "unknown": "preserve me"}),
+        ])
+        for tool, value in fixtures:
+            with self.subTest(tool=tool, value=value):
+                result = self.parse(self.payload(tool_name=tool, tool_input=value))
+                self.assertEqual(result["language"], "json")
+                self.assertEqual(json.loads(result["source"]), value)
 
     def test_dsh_decisions_and_continue_controls(self):
         decisions = self.snapshot(op="decisions", host="dsh")

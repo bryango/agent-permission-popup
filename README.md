@@ -130,12 +130,25 @@ Send one JSON object on stdin and close stdin:
 
 Required fields: `hook_event_name` exactly `PermissionRequest`, nonblank string
 `cwd` and `tool_name`, and object-valued `tool_input`. Input is capped at 8 MiB.
-Optional metadata is not used to fabricate a transcript or title; DSH uses the
-generic tool-permission heading and never queries Codex/Claude session storage.
+The current DSH caller supplies no thread title.
+The heading uses a nonblank `tool_input.description`,
+falling back to the generic tool-permission heading when it is absent or invalid.
+DSH never queries Codex/Claude session storage.
 The caller may map bash/edit/write to Bash/Edit/Write for presentation, or pass
-the lowercase names. Unknown tool names and fields remain visible as JSON.
-Bash specialization falls back to full JSON if additional arguments would
-otherwise be hidden (such as `sandbox_permissions`).
+the lowercase names. Bash displays its exact command; Edit and Write show the
+path and exact snippets or proposed complete content; `run_code` shows the exact
+program. The explanation shows a nonblank justification distinct from the heading,
+limited to three lines with the full explanation in its tooltip.
+When the description is the heading and no distinct justification is available,
+the explanation is hidden rather than repeating the heading.
+**Show request details** switches the same scrollable source view to the complete
+tool-input JSON, including sandbox permissions, working directory, timeout,
+background execution, and both explanation fields.
+**Show command / content** restores the exact command, file operation, or program.
+Bash retains shell highlighting in the normal view.
+Unknown tool names, unknown fields, and
+malformed known controls fall back to complete JSON, preserving every value.
+This DSH-only presentation does not alter Codex/Claude parsing or responses.
 
 The DSH window has **three actions**:
 

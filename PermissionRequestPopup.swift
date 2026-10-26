@@ -119,6 +119,8 @@ private struct HookRequest {
     let toolName: String
     let permissionMode: String?
     let dangerouslyDisableSandbox: Bool
+    let requestDetails: String?
+    let heading: String?
     let reason: String?
     let source: String
     let language: SourceLanguage
@@ -192,6 +194,8 @@ private struct HookRequest {
             toolName: toolName,
             permissionMode: root["permission_mode"] as? String,
             dangerouslyDisableSandbox: dangerouslyDisableSandbox,
+            requestDetails: nil,
+            heading: nil,
             reason: reason,
             source: source,
             language: language
@@ -212,27 +216,17 @@ private struct HookRequest {
 
         var source = Self.prettyJSON(input)
         var language = SourceLanguage.json
-        switch toolName {
-        case "Bash", "bash":
-            // Never hide additional DSH arguments (e.g. requested sandbox
-            // permissions) behind a command-only display.
-            if let command = input["command"] as? String,
-               Set(input.keys).isSubset(of: ["command", "description", "justification"]) {
-                source = command
-                language = .shell
-            }
-        case "Edit", "edit":
-            if let rendered = Self.claudeEditSource(input) {
-                source = rendered
-                language = .text
-            }
-        case "Write", "write":
-            if let rendered = Self.claudeWriteSource(input) {
-                source = rendered
-                language = .text
-            }
-        default:
-            break
+        let description = (input["description"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let heading = description.flatMap { $0.isEmpty ? nil : $0 }
+        let justification = (input["justification"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let reason = justification.flatMap { $0.isEmpty || $0 == heading ? nil : $0 }
+        var requestDetails: String?
+        if let rendered = Self.dshSource(toolName, input) {
+            source = rendered.source
+            language = rendered.language
+            requestDetails = Self.prettyJSON(input)
         }
 
         return HookRequest(
@@ -243,10 +237,70 @@ private struct HookRequest {
             toolName: toolName,
             permissionMode: root["permission_mode"] as? String,
             dangerouslyDisableSandbox: false,
-            reason: (input["description"] as? String) ?? (input["justification"] as? String),
+            requestDetails: requestDetails,
+            heading: heading,
+            reason: reason,
             source: source,
             language: language
         )
+    }
+
+    private static func dshSource(_ tool: String, _ input: [String: Any])
+        -> (source: String, language: SourceLanguage)? {
+        let bodyKeys: Set<String>
+        var optionKeys: Set<String> = ["description", "justification", "sandbox_permissions"]
+        switch tool {
+        case "Bash", "bash", "pwsh", "Pwsh":
+            bodyKeys = ["command"]
+            optionKeys.formUnion(["workdir", "timeoutMs", "run_in_background"])
+        case "Edit", "edit":
+            bodyKeys = ["file_path", "old_string", "new_string", "replace_all"]
+        case "Write", "write":
+            bodyKeys = ["file_path", "content"]
+        case "run_code":
+            bodyKeys = ["code"]
+            optionKeys.insert("timeoutMs")
+        default:
+            return nil
+        }
+        guard Set(input.keys).isSubset(of: bodyKeys.union(optionKeys)) else { return nil }
+        for key in ["description", "justification", "sandbox_permissions", "workdir"] {
+            if let value = input[key], !(value is String) { return nil }
+        }
+        if let mode = input["sandbox_permissions"] as? String,
+           !["workspace-write", "danger-full-access"].contains(mode) { return nil }
+        if let value = input["timeoutMs"] {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite, number.doubleValue > 0 else { return nil }
+        }
+        for key in ["run_in_background", "replace_all"] {
+            if let value = input[key] {
+                guard let number = value as? NSNumber,
+                      CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+            }
+        }
+        let body = input.filter { bodyKeys.contains($0.key) }
+        let source: String
+        var language = SourceLanguage.text
+        switch tool {
+        case "Bash", "bash", "pwsh", "Pwsh":
+            guard let command = body["command"] as? String else { return nil }
+            source = command
+            if tool == "Bash" || tool == "bash" { language = .shell }
+        case "Edit", "edit":
+            guard let rendered = Self.claudeEditSource(body) else { return nil }
+            source = rendered
+        case "Write", "write":
+            guard let rendered = Self.claudeWriteSource(body) else { return nil }
+            source = rendered
+        case "run_code":
+            guard let code = body["code"] as? String else { return nil }
+            source = code
+        default:
+            return nil
+        }
+        return (source, language)
     }
 
     private static func claudeEditSource(_ input: [String: Any]) -> String? {
@@ -963,6 +1017,9 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     private let displayText: DisplayText
     private let displayCWD: DisplayText
     private let displayReason: DisplayText?
+    private let displayRequestDetails: DisplayText?
+    private weak var sourceTextView: NSTextView?
+    private var showingRequestDetails = false
     private let hotKey: HotKeySpec
     private let deadline: Date
 
@@ -983,13 +1040,14 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         self.host = host
         self.raiseHost = raiseHost
         if host == .dsh { self.decision = .deny }
-        let singleLineThreadTitle = threadTitle?
+        let singleLineThreadTitle = (threadTitle ?? request.heading)?
             .components(separatedBy: .newlines)
             .joined(separator: " ")
         self.displayThreadTitle = singleLineThreadTitle.map(DisplayText.revealingControls)
         self.displayText = DisplayText.revealingControls(in: request.source)
         self.displayCWD = DisplayText.revealingControls(in: request.cwd)
         self.displayReason = request.reason.map(DisplayText.revealingControls)
+        self.displayRequestDetails = request.requestDetails.map(DisplayText.revealingControls)
         self.hotKey = hotKey
         self.deadline = deadline
     }
@@ -1169,11 +1227,14 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
             : reasonValue)
         reason.font = NSFont.systemFont(ofSize: 16)
         reason.maximumNumberOfLines = 3
+        reason.isHidden = host == .dsh && request.heading != nil && reasonValue.isEmpty
+        reason.toolTip = reasonValue
 
         let revealedCharacterCount = displayText.revealedCharacterCount
             + (displayThreadTitle?.revealedCharacterCount ?? 0)
             + displayCWD.revealedCharacterCount
             + (displayReason?.revealedCharacterCount ?? 0)
+            + (displayRequestDetails?.revealedCharacterCount ?? 0)
         let integrityMessage: String
         if revealedCharacterCount == 0 {
             integrityMessage = "Exact content • syntax highlighted • soft-wrapped"
@@ -1255,6 +1316,13 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         root.addArrangedSubview(heading)
         root.addArrangedSubview(location)
         root.addArrangedSubview(reason)
+        if displayRequestDetails != nil {
+            let detailsButton = NSButton(title: "Show request details", target: self,
+                action: #selector(toggleRequestDetails(_:)))
+            detailsButton.bezelStyle = .inline
+            detailsButton.font = NSFont.systemFont(ofSize: 13)
+            root.addArrangedSubview(detailsButton)
+        }
         root.addArrangedSubview(integrity)
         root.addArrangedSubview(scrollView)
         root.addArrangedSubview(footerRow)
@@ -1318,6 +1386,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
 
     private func makeSourceView() -> NSScrollView {
         let textView = NSTextView()
+        sourceTextView = textView
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
@@ -1347,6 +1416,17 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         scrollView.autohidesScrollers = true
         scrollView.documentView = textView
         return scrollView
+    }
+
+    @objc private func toggleRequestDetails(_ sender: NSButton) {
+        guard let details = displayRequestDetails else { return }
+        showingRequestDetails.toggle()
+        sourceTextView?.textStorage?.setAttributedString(SyntaxHighlighter.highlight(
+            showingRequestDetails ? details.value : displayText.value,
+            as: showingRequestDetails ? .json : request.language
+        ))
+        sourceTextView?.scrollToBeginningOfDocument(nil)
+        sender.title = showingRequestDetails ? "Show command / content" : "Show request details"
     }
 
     private func registerGlobalHotKey() {
