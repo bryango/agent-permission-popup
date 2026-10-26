@@ -189,10 +189,13 @@ Deny response (one JSON line on stdout, exit 0):
 
 Timeout preserves the existing explanatory timeout/away message. Invalid DSH
 input and queue failures return explicit denial with an infrastructure reason.
-Incorrect CLI arguments exit nonzero. The DSH caller **must fail closed** for
-empty/malformed output, wrong events, unsupported decisions, nonzero exits,
-crashes, cancellation, spawn errors, and outer timeouts. Only a valid explicit
-`allow` permits calling the next Auto-review gate; `allow_direct` permits the
+Incorrect CLI arguments exit nonzero. A successful exit with zero-byte stdout
+means **no decision**, including when the tray toggle is disabled; the DSH caller
+continues Auto review and never treats this as direct authorization or denial.
+The caller **must fail closed** for malformed output (including whitespace-only
+output), wrong events, unsupported decisions, nonzero exits, crashes,
+cancellation, spawn errors, and outer timeouts. Both explicit `allow` and
+successful no-decision output enter Auto review; `allow_direct` permits the
 updated caller to skip that reviewer for this action. The popup cannot enforce that
 the caller actually invokes Auto review or keeps the tool sandboxed.
 
@@ -237,8 +240,8 @@ or invalid setting keeps the popup enabled; only a JSON Boolean `false` disables
 
 When disabled, new popup invocations exit successfully with no stdout, for all
 hosts. This is **no decision**, not an approval. The host continues its normal
-permission processing. In particular, an existing strict DSH caller may reject
-empty output; it must not mistake it for `allow` or `allow_direct`.
+permission processing. The DSH Semi Auto caller continues Auto review;
+it must not mistake empty output for either direct authorization or a denial.
 Already-visible windows are unchanged. Queued requests check the setting again
 before opening a window. Enabling restores the existing popup behavior.
 
