@@ -303,8 +303,7 @@ class DSHContractTests(unittest.TestCase):
                                  fixture["keyCode"] in (36, 76) and fixture["mask"] == 2)
                 self.assertEqual(interpretation["dismiss"],
                                  fixture["characters"].lower() == "w" and fixture["mask"] == 1)
-        self.assertEqual(result["continueResponse"],
-                         self.snapshot(op="decisions", host="dsh")["allow"])
+        self.assertIsNone(result["continueResponse"])
 
     def test_dsh_rendering_and_input_limit(self):
         self.assertEqual(self.parse(self.payload())["language"], "shell")
@@ -428,12 +427,12 @@ class DSHContractTests(unittest.TestCase):
         codex = self.snapshot(op="decisions", host="codex")
         for name in ("allow", "deny", "timeout"):
             self.assertEqual(decisions[name], codex[name])
-        self.assertEqual(decisions["defer"], decisions["deny"])
+        self.assertIsNone(decisions["defer"])
         controls = self.snapshot(op="controls", host="dsh")
         self.assertEqual(controls["allowTitle"], "Authorize  ⌃↩")
-        self.assertEqual(controls["continueResponse"], decisions["allow"])
+        self.assertIsNone(controls["continueResponse"])
         self.assertEqual(json.loads(controls["authorizeResponse"]), {"hookSpecificOutput": {
-            "hookEventName": "PermissionRequest", "decision": {"behavior": "allow_direct"}}})
+            "hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}})
         self.assertTrue(controls["hasContinue"])
         for host in ("codex", "claude"):
             controls = self.snapshot(op="controls", host=host)

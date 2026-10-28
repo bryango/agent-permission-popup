@@ -63,8 +63,8 @@ private enum PopupHost: String {
 
 
     // Return and the global key authorize only the handoff to Auto review.
-    var continueDecision: HookDecision { self == .dsh ? .allow : .deferToHost }
-    var authorizeDecision: HookDecision { self == .dsh ? .directAllow : .allow }
+    var continueDecision: HookDecision { .deferToHost }
+    var authorizeDecision: HookDecision { .allow }
     var hasContinueButton: Bool { true }
     var allowButtonTitle: String {
         "Authorize  ⌃↩"
@@ -568,7 +568,6 @@ private struct DisplayText {
 
 private enum HookDecision {
     case allow
-    case directAllow
     case deny
     case timeout
     case deferToHost
@@ -577,7 +576,7 @@ private enum HookDecision {
         switch self {
         case .deny, .timeout:
             return true
-        case .allow, .directAllow, .deferToHost:
+        case .allow, .deferToHost:
             return false
         }
     }
@@ -587,18 +586,8 @@ private enum HookDecision {
     }
 
     func responseData(for host: PopupHost) -> Data? {
-        // Defensive boundary: even an accidental abstention cannot let DSH
-        // proceed without an explicit human allow.
-        if host == .dsh, case .deferToHost = self {
-            return HookDecision.deny.responseData(for: .dsh)
-        }
         let decision: [String: Any]
         switch self {
-        case .directAllow:
-            // A distinct DSH-only value makes older callers fail closed instead
-            // of silently treating direct approval as a review handoff.
-            guard host == .dsh else { return nil }
-            decision = ["behavior": "allow_direct"]
         case .allow:
             decision = ["behavior": "allow"]
         case .deny:
@@ -2159,8 +2148,6 @@ private struct PermissionPopupMain {
             if let response = decision.responseData(for: host) {
                 FileHandle.standardOutput.write(response)
                 FileHandle.standardOutput.write(Data([0x0A]))
-            } else if host == .dsh {
-                DSHFailure.emit("DSH human authorization produced no decision; denied before Auto review.")
             }
         }
     }

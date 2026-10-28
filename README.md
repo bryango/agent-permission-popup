@@ -153,33 +153,27 @@ This DSH-only presentation does not alter Codex/Claude parsing or responses.
 The DSH window has **three actions**:
 
 - **Auto review**: button, Return/keypad Enter, or the displayed
-  global shortcut. Explicitly approves sending this action to the DSH Auto reviewer.
+  global shortcut. Returns no decision so the DSH caller continues Auto review.
 - **Authorize**: button or Control-Return/keypad Enter. Explicitly approves
   this action without Auto review; downstream sandbox restrictions still apply.
 - **Deny**: button, Escape, Command-W, window close, or timeout. All deny.
 
-There is no Continue/abstain route. Even an accidental internal abstention
-serializes as deny in DSH mode. The same global shortcut still means Continue
-(no decision) in Codex and Claude modes. All hosts share the queue lock; do not
+The global shortcut returns no decision in all three host modes.
+The DSH window starts with a deny decision until the user chooses an action.
+All hosts share the queue lock; do not
 run them with different `TMPDIR` values if they must share that queue.
 
-Auto-review handoff response (one JSON line on stdout, exit 0; unchanged):
+Auto-review handoff response: exit 0 with empty stdout, matching Codex.
+
+Direct-approval response (one JSON line on stdout, exit 0):
 
 ```json
 {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
 ```
 
-Direct-approval response (DSH only):
-
-```json
-{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow_direct"}}}
-```
-
-The DSH caller must explicitly support `allow_direct` to skip Auto review for
-this action while preserving downstream gates and sandboxing. Older strict
-callers reject this new value; `allow` is never reinterpreted as direct approval.
-The caller integration is not implemented in this popup repository, so the new
-button alone does not establish end-to-end direct approval in DSH.
+The DSH caller interprets `allow` as direct approval and empty stdout as an
+Auto-review handoff. Update the popup and caller together: older callers used
+`allow` for Auto review and `allow_direct` for direct approval.
 
 Deny response (one JSON line on stdout, exit 0):
 
@@ -194,9 +188,9 @@ means **no decision**, including when the tray toggle is disabled; the DSH calle
 continues Auto review and never treats this as direct authorization or denial.
 The caller **must fail closed** for malformed output (including whitespace-only
 output), wrong events, unsupported decisions, nonzero exits, crashes,
-cancellation, spawn errors, and outer timeouts. Both explicit `allow` and
-successful no-decision output enter Auto review; `allow_direct` permits the
-updated caller to skip that reviewer for this action. The popup cannot enforce that
+cancellation, spawn errors, and outer timeouts. Successful no-decision output
+enters Auto review; `allow` permits the caller to skip that reviewer for this
+action. The popup cannot enforce that
 the caller actually invokes Auto review or keeps the tool sandboxed.
 
 The existing 540-second popup/queue deadline and environment-variable precedence
