@@ -121,6 +121,7 @@ private struct HookRequest {
     let dangerouslyDisableSandbox: Bool
     let requestDetails: String?
     let heading: String?
+    let nativeApproval: String?
     let reason: String?
     let source: String
     let language: SourceLanguage
@@ -196,6 +197,7 @@ private struct HookRequest {
             dangerouslyDisableSandbox: dangerouslyDisableSandbox,
             requestDetails: nil,
             heading: nil,
+            nativeApproval: nil,
             reason: reason,
             source: source,
             language: language
@@ -216,14 +218,16 @@ private struct HookRequest {
 
         var source = Self.prettyJSON(input)
         var language = SourceLanguage.json
-        let description = (input["description"] as? String)?
+        let envelope = Self.dshEnvelope(input)
+        let arguments = envelope?.arguments ?? input
+        let description = (arguments["description"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let heading = description.flatMap { $0.isEmpty ? nil : $0 }
-        let justification = (input["justification"] as? String)?
+        let justification = (arguments["justification"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let reason = justification.flatMap { $0.isEmpty || $0 == heading ? nil : $0 }
         var requestDetails: String?
-        if let rendered = Self.dshSource(toolName, input) {
+        if let rendered = Self.dshSource(toolName, arguments) {
             source = rendered.source
             language = rendered.language
             requestDetails = Self.prettyJSON(input)
@@ -239,10 +243,30 @@ private struct HookRequest {
             dangerouslyDisableSandbox: false,
             requestDetails: requestDetails,
             heading: heading,
+            nativeApproval: envelope?.approval,
             reason: reason,
             source: source,
             language: language
         )
+    }
+
+    private static func dshEnvelope(_ input: [String: Any])
+        -> (arguments: [String: Any], approval: String)? {
+        guard Set(input.keys) == ["native_approval", "tool_arguments"],
+              let arguments = input["tool_arguments"] as? [String: Any],
+              let approval = input["native_approval"] as? [String: Any],
+              Set(approval.keys).isSubset(of: ["reason", "requestedMode"]) else { return nil }
+        if let reason = approval["reason"], !(reason is String) { return nil }
+        if let mode = approval["requestedMode"] {
+            guard let mode = mode as? String,
+                  ["read-only", "workspace-write", "danger-full-access"].contains(mode) else { return nil }
+        }
+        let scope = (approval["requestedMode"] as? String)
+            .map { "Requested sandbox: \($0)" } ?? "Native approval"
+        let reason = (approval["reason"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (arguments, reason.flatMap { $0.isEmpty ? nil : $0 }
+            .map { "\(scope)\n\($0)" } ?? scope)
     }
 
     private static func dshSource(_ tool: String, _ input: [String: Any])
@@ -1006,6 +1030,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
     private let displayText: DisplayText
     private let displayCWD: DisplayText
     private let displayReason: DisplayText?
+    private let displayNativeApproval: DisplayText?
     private let displayRequestDetails: DisplayText?
     private weak var sourceTextView: NSTextView?
     private var showingRequestDetails = false
@@ -1036,6 +1061,7 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         self.displayText = DisplayText.revealingControls(in: request.source)
         self.displayCWD = DisplayText.revealingControls(in: request.cwd)
         self.displayReason = request.reason.map(DisplayText.revealingControls)
+        self.displayNativeApproval = request.nativeApproval.map(DisplayText.revealingControls)
         self.displayRequestDetails = request.requestDetails.map(DisplayText.revealingControls)
         self.hotKey = hotKey
         self.deadline = deadline
@@ -1219,10 +1245,19 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         reason.isHidden = host == .dsh && request.heading != nil && reasonValue.isEmpty
         reason.toolTip = reasonValue
 
+        let nativeApproval = displayNativeApproval.map { display in
+            let label = NSTextField(wrappingLabelWithString: display.value)
+            label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+            label.maximumNumberOfLines = 3
+            label.toolTip = display.value
+            return label
+        }
+
         let revealedCharacterCount = displayText.revealedCharacterCount
             + (displayThreadTitle?.revealedCharacterCount ?? 0)
             + displayCWD.revealedCharacterCount
             + (displayReason?.revealedCharacterCount ?? 0)
+            + (displayNativeApproval?.revealedCharacterCount ?? 0)
             + (displayRequestDetails?.revealedCharacterCount ?? 0)
         let integrityMessage: String
         if revealedCharacterCount == 0 {
@@ -1305,6 +1340,10 @@ private final class PermissionWindowController: NSObject, NSWindowDelegate, NSSo
         root.addArrangedSubview(heading)
         root.addArrangedSubview(location)
         root.addArrangedSubview(reason)
+        if let nativeApproval {
+            root.addArrangedSubview(nativeApproval)
+            nativeApproval.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48).isActive = true
+        }
         if displayRequestDetails != nil {
             let detailsButton = NSButton(title: "Show request details", target: self,
                 action: #selector(toggleRequestDetails(_:)))

@@ -157,7 +157,7 @@ class DSHContractTests(unittest.TestCase):
                                                  "__CONTINUE_DECISION__", "host.continueDecision"
                                                  if label == "candidate" else "HookDecision.deferToHost").replace(
                                                  "__REQUEST_DETAILS__",
-                                                 'if host == .dsh { result["requestDetails"] = request.requestDetails as Any? ?? NSNull(); result["heading"] = request.heading as Any? ?? NSNull() }'
+                                                 'if host == .dsh { result["requestDetails"] = request.requestDetails as Any? ?? NSNull(); result["heading"] = request.heading as Any? ?? NSNull(); result["nativeApproval"] = request.nativeApproval as Any? ?? NSNull() }'
                                                  if label == "candidate" else "")
                 (directory / name).write_text(source)
             binary = directory / "driver"
@@ -355,6 +355,62 @@ class DSHContractTests(unittest.TestCase):
         plain = self.parse(self.payload(tool_input={"command": command}))
         self.assertEqual(plain["language"], "shell")
         self.assertEqual(plain["source"], command)
+
+    def test_dsh_native_approval_wrapper_restores_tool_presentation(self):
+        command = "printf '%s\\n' \"exact command\"\ngit status --short\n"
+        args = {"command": command, "description": "Inspect files",
+                "justification": "Tool justification"}
+        for mode in (None, "read-only", "workspace-write", "danger-full-access"):
+            approval = {"reason": "Native permission reason"}
+            if mode is not None:
+                approval["requestedMode"] = mode
+            wrapped = {"native_approval": approval, "tool_arguments": args}
+            result = self.parse(self.payload(tool_input=wrapped))
+            self.assertEqual(result["language"], "shell")
+            self.assertEqual(result["source"], command)
+            self.assertEqual(result["heading"], args["description"])
+            self.assertEqual(result["reason"], args["justification"])
+            scope = "Native approval" if mode is None else f"Requested sandbox: {mode}"
+            self.assertEqual(result["nativeApproval"], scope + "\nNative permission reason")
+            self.assertEqual(json.loads(result["requestDetails"]), wrapped)
+        generic = self.parse(self.payload(tool_input={"native_approval": {}, "tool_arguments": args}))
+        self.assertEqual(generic["nativeApproval"], "Native approval")
+        self.assertNotIn("danger-full-access", generic["nativeApproval"])
+        for tool, arguments, language in (
+            ("Edit", {"file_path": "a", "old_string": "before", "new_string": "after"}, "text"),
+            ("Write", {"file_path": "a", "content": "exact content"}, "text"),
+            ("run_code", {"code": "console.log('exact');"}, "text"),
+        ):
+            wrapped = {"native_approval": {}, "tool_arguments": arguments}
+            result = self.parse(self.payload(tool_name=tool, tool_input=wrapped))
+            flat = self.parse(self.payload(tool_name=tool, tool_input=arguments))
+            self.assertEqual(result["source"], flat["source"])
+            self.assertEqual(result["language"], language)
+            self.assertEqual(json.loads(result["requestDetails"]), wrapped)
+
+    def test_dsh_unknown_or_malformed_wrappers_preserve_full_json(self):
+        args = {"command": "pwd", "description": "Inspect files"}
+        cases = [
+            {"native_approval": value, "tool_arguments": args}
+            for value in (None, [], "approval", 1, {"reason": None}, {"reason": 1},
+                          {"requestedMode": None}, {"requestedMode": "unknown"}, {"extra": True})
+        ]
+        cases += [{"native_approval": {}, "tool_arguments": value} for value in (None, [], "pwd", 1)]
+        cases += [
+            {"native_approval": {}, "tool_arguments": args, "extra": True},
+            {"native_approval": {}, "tool_arguments": dict(args, unknown="retain")},
+            {"native_approval": {}, "tool_arguments": dict(args, command=123)},
+            {"native_approval": {}, "tool_arguments": {}},
+            {"native_approval": {}, "command": "pwd"},
+        ]
+        for wrapped in cases:
+            with self.subTest(wrapped=wrapped):
+                result = self.parse(self.payload(tool_input=wrapped))
+                self.assertEqual(result["language"], "json")
+                self.assertEqual(json.loads(result["source"]), wrapped)
+        unknown = {"native_approval": {}, "tool_arguments": args}
+        result = self.parse(self.payload(tool_name="unknown-tool", tool_input=unknown))
+        self.assertEqual(json.loads(result["source"]), unknown)
 
     def test_dsh_description_heading_and_justification(self):
         for description in (None, "", "  \n ", 123, False, [], {}):

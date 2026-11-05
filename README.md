@@ -131,7 +131,25 @@ Send one JSON object on stdin and close stdin:
 Required fields: `hook_event_name` exactly `PermissionRequest`, nonblank string
 `cwd` and `tool_name`, and object-valued `tool_input`. Input is capped at 8 MiB.
 The current DSH caller supplies no thread title.
-The heading uses a nonblank `tool_input.description`,
+The caller can send a native approval wrapper:
+
+```json
+{
+  "native_approval": {
+    "reason": "Native permission reason",
+    "requestedMode": "workspace-write"
+  },
+  "tool_arguments": {"command": "pwd", "description": "Inspect files"}
+}
+```
+
+Both approval fields are optional; `requestedMode`, when supplied,
+must be `read-only`, `workspace-write`, or `danger-full-access`.
+The popup shows the native scope and reason separately from the tool description.
+Without a supplied mode it says **Native approval**, without inferring a scope.
+The original flat `tool_input` format remains supported.
+
+The heading uses a nonblank description from `tool_arguments` (or the flat input),
 falling back to the generic tool-permission heading when it is absent or invalid.
 DSH never queries Codex/Claude session storage.
 The caller may map bash/edit/write to Bash/Edit/Write for presentation, or pass
@@ -142,7 +160,7 @@ limited to three lines with the full explanation in its tooltip.
 When the description is the heading and no distinct justification is available,
 the explanation is hidden rather than repeating the heading.
 **Show request details** switches the same scrollable source view to the complete
-tool-input JSON, including sandbox permissions, working directory, timeout,
+tool-input JSON, including the native approval wrapper, sandbox permissions, working directory, timeout,
 background execution, and both explanation fields.
 **Show command / content** restores the exact command, file operation, or program.
 Bash retains shell highlighting in the normal view.
