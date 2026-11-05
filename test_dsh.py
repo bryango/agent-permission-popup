@@ -398,9 +398,6 @@ class DSHContractTests(unittest.TestCase):
         cases += [{"native_approval": {}, "tool_arguments": value} for value in (None, [], "pwd", 1)]
         cases += [
             {"native_approval": {}, "tool_arguments": args, "extra": True},
-            {"native_approval": {}, "tool_arguments": dict(args, unknown="retain")},
-            {"native_approval": {}, "tool_arguments": dict(args, command=123)},
-            {"native_approval": {}, "tool_arguments": {}},
             {"native_approval": {}, "command": "pwd"},
         ]
         for wrapped in cases:
@@ -410,7 +407,20 @@ class DSHContractTests(unittest.TestCase):
                 self.assertEqual(json.loads(result["source"]), wrapped)
         unknown = {"native_approval": {}, "tool_arguments": args}
         result = self.parse(self.payload(tool_name="unknown-tool", tool_input=unknown))
-        self.assertEqual(json.loads(result["source"]), unknown)
+        self.assertEqual(json.loads(result["source"]), args)
+        self.assertEqual(json.loads(result["requestDetails"]), unknown)
+
+    def test_dsh_generic_arguments_and_native_reason(self):
+        for args in ({"action": "list_bundles", "offset": 9, "limit": 1},
+                     {"command": 123}, {}, {"command": "pwd", "unknown": "retain"}):
+            wrapped = {"native_approval": {"reason": "Native permission reason",
+                                           "requestedMode": "danger-full-access"},
+                       "tool_arguments": args}
+            result = self.parse(self.payload(tool_name="plugin_manager", tool_input=wrapped))
+            self.assertEqual(json.loads(result["source"]), args)
+            self.assertEqual(result["language"], "json")
+            self.assertEqual(result["reason"], "Native permission reason")
+            self.assertEqual(json.loads(result["requestDetails"]), wrapped)
 
     def test_dsh_description_heading_and_justification(self):
         for description in (None, "", "  \n ", 123, False, [], {}):

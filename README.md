@@ -145,8 +145,12 @@ The caller can send a native approval wrapper:
 
 Both approval fields are optional; `requestedMode`, when supplied,
 must be `read-only`, `workspace-write`, or `danger-full-access`.
-The popup shows the native scope and reason separately from the tool description.
-Without a supplied mode it says **Native approval**, without inferring a scope.
+The native scope and reason remain in the request JSON,
+without an additional explanation block above the content.
+For valid wrappers, the normal view shows only the tool arguments,
+using the tool-specific formatter when available and JSON otherwise.
+The full wrapper is available in **Show request details**.
+When there is no distinct tool justification, the explanation uses the native reason.
 The original flat `tool_input` format remains supported.
 
 The heading uses a nonblank description from `tool_arguments` (or the flat input),
